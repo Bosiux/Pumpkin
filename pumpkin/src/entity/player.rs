@@ -4,6 +4,7 @@ use std::{
         atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU8},
         Arc,
     },
+    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -31,7 +32,7 @@ use pumpkin_protocol::{
     client::play::{
         CCombatDeath, CEntityStatus, CGameEvent, CHurtAnimation, CKeepAlive, CPlayDisconnect,
         CPlayerAbilities, CPlayerInfoUpdate, CPlayerPosition, CSetHealth, CSystemChatMessage,
-        GameEvent, PlayerAction,
+        GameEvent, PlayerAction, CSetExperience,
     },
     server::play::{
         SChatCommand, SChatMessage, SClientCommand, SClientInformationPlay, SClientTickEnd,
@@ -89,6 +90,8 @@ pub struct Player {
     pub food: AtomicI32,
     /// The player's food saturation level.
     pub food_saturation: AtomicCell<f32>,
+    /// The player's experience level.
+    pub experience: AtomicI32,
     /// The ID of the currently open container (if any).
     pub open_container: AtomicCell<Option<u64>>,
     /// The item currently being held by the player.
@@ -177,6 +180,7 @@ impl Player {
             carried_item: AtomicCell::new(None),
             teleport_id_count: AtomicI32::new(0),
             abilities: Mutex::new(Abilities::default()),
+            experience: AtomicI32::new(0),
             gamemode: AtomicCell::new(gamemode),
             // We want this to be an impossible watched section so that `player_chunker::update_position`
             // will mark chunks as watched for a new join rather than a respawn
@@ -643,6 +647,23 @@ impl Player {
             .send_packet(&CSystemChatMessage::new(text, false))
             .await;
     }
+
+    pub async fn experience_trigger(&self) {
+        let total_xp = self.experience.load(Ordering::SeqCst);
+        let level = total_xp / get_xp_per_value();
+        
+        // Calculate progress to next level (0.0 to 1.0)
+        let progress = (total_xp % get_xp_per_value()) as f32 / get_xp_per_value() as f32;
+
+        // Send packet to update client UI
+        self.client
+            .send_packet(&CSetExperience::new(
+                progress,
+                level as i32,
+                total_xp
+            ))
+            .await;
+    }
 }
 
 impl Player {
@@ -787,6 +808,37 @@ impl Player {
         };
         Ok(())
     }
+
+    pub async fn add_experience(&self, points: i32) {
+        self.experience.fetch_add(points, Ordering::SeqCst);
+        self.update_experience_display().await;
+    }
+
+    pub async fn set_experience(&self, points: i32) {
+        self.experience.store(points, Ordering::SeqCst);
+        self.update_experience_display().await;
+    }
+    
+    pub fn get_experience(&self) -> i32 {
+        self.experience.load(Ordering::SeqCst)
+    }
+
+    
+    async fn update_experience_display(&self) {
+        let total_exp = self.experience.load(Ordering::SeqCst);
+        let level = total_exp / get_xp_per_value();
+        
+        let exp_this_level = total_exp % get_xp_per_value();
+        let progress = exp_this_level as f32 / get_xp_per_value() as f32;
+
+        let packet = CSetExperience::new(
+            progress,
+            level,
+            total_exp
+        );
+        self.client.send_packet(&packet).await;
+    }
+
 }
 
 /// Represents a player's abilities and special powers.
@@ -867,5 +919,19 @@ impl TryFrom<i32> for ChatMode {
             2 => Ok(Self::Hidden),
             _ => Err(InvalidChatMode),
         }
+    }
+}
+
+// fast variable (only test purposes)
+pub fn get_xp_per_value() -> i32 {
+    17
+}
+
+// correct calculation of xp based on level (not implemented)
+pub fn calculate_xp_for_level(level: i32) -> i32 {
+    match level {
+        l if l <= 16 => 2 * l,
+        l if l <= 31 => 75 * l - 389,
+        l => 158 * l - 158
     }
 }

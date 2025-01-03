@@ -17,6 +17,7 @@ use dispatcher::CommandError;
 use pumpkin_core::math::vector3::Vector3;
 use pumpkin_core::permission::PermissionLvl;
 use pumpkin_core::text::TextComponent;
+use crate::command::commands::cmd_xp;
 
 pub mod args;
 pub mod client_cmd_suggestions;
@@ -131,6 +132,7 @@ pub fn default_dispatcher() -> CommandDispatcher {
     dispatcher.register(cmd_fill::init_command_tree(), PermissionLvl::Two);
     dispatcher.register(cmd_op::init_command_tree(), PermissionLvl::Three);
     dispatcher.register(cmd_deop::init_command_tree(), PermissionLvl::Three);
+    dispatcher.register(cmd_xp::init_command_tree(), PermissionLvl::Two);
 
     dispatcher
 }
