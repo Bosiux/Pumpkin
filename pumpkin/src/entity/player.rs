@@ -904,7 +904,7 @@ impl Player {
                 if self.living_entity.entity.sprinting.load(Ordering::Relaxed) {
                     self.add_exhaustion(0.1 * delta as f32 * 0.01).await;
                 } else {
-                    self.add_exhaustion(0.0 * delta as f32 * 0.01).await;
+                    self.add_exhaustion(0.01 * delta as f32 * 0.01).await;
                 }
             }
         }

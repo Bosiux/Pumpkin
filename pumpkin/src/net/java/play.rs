@@ -51,6 +51,7 @@ use pumpkin_protocol::java::server::play::{
     SPlayerSession, SSetCommandBlock, SSetCreativeSlot, SSetHeldItem, SSetPlayerGround, SSwingArm,
     SUpdateSign, SUseItem, SUseItemOn, Status,
 };
+use pumpkin_protocol::java::client::play::CSetHealth;
 use pumpkin_util::math::vector3::Vector3;
 use pumpkin_util::math::{polynomial_rolling_hash, position::BlockPos, wrap_degrees};
 use pumpkin_util::text::color::NamedColor;
@@ -58,6 +59,7 @@ use pumpkin_util::{GameMode, text::TextComponent};
 use pumpkin_world::block::entities::command_block::CommandBlockEntity;
 use pumpkin_world::block::entities::sign::SignBlockEntity;
 use pumpkin_world::item::ItemStack;
+use pumpkin_world::inventory::Inventory;
 use pumpkin_world::world::BlockFlags;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -1301,7 +1303,46 @@ impl JavaClient {
                     player.drop_held_item(true).await;
                 }
                 Status::ShootArrowOrFinishEating => {
-                    log::debug!("todo");
+                    use pumpkin_data::data_component_impl::FoodImpl;
+
+                    let inventory = player.inventory();
+                    let main_hand = inventory.held_item();
+
+                    let mut updated_main: Option<pumpkin_world::item::ItemStack> = None;
+                    {
+                        let mut held = main_hand.lock().await;
+                        if let Some(food) = held.get_data_component::<FoodImpl>() {
+                            let level = player.hunger_manager.level.load();
+                            if level < 20 || food.can_always_eat {
+                                let new_level = (u16::from(level) + food.nutrition as u16).min(20) as u8;
+                                player.hunger_manager.level.store(new_level);
+                                let current_saturation = player.hunger_manager.saturation.load();
+                                let capped_saturation = (current_saturation + food.saturation).min(new_level as f32);
+                                player.hunger_manager.saturation.store(capped_saturation);
+                                if player.gamemode.load() != GameMode::Creative {
+                                    held.decrement(1);
+                                    updated_main = Some(held.clone());
+                                }
+                                player.send_health().await;
+                            }
+                        }
+                    }
+                    if let Some(new_stack) = updated_main {
+                        inventory
+                            .set_stack(inventory.get_selected_slot() as usize, new_stack)
+                            .await;
+                        player
+                            .client
+                            .send_packet_now(&CSetHealth::new(
+                                player.living_entity.health.load(),
+                                player.hunger_manager.level.load().into(),
+                                player.hunger_manager.saturation.load(),
+                            ))
+                            .await;
+                        self.update_sequence(player, player_action.sequence.0);
+                        return;
+                    }
+                    self.update_sequence(player, player_action.sequence.0);
                 }
                 Status::SwapItem => {
                     player.swap_item().await;
